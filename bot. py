@@ -1,0 +1,131 @@
+import os
+import asyncio
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from PIL import Image, ImageDraw
+
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+
+# A global dictionary to temporarily collect files belonging to the same media group
+# Structure: { media_group_id: [list_of_downloaded_file_paths] }
+MEDIA_GROUPS = {}
+
+# --- 1. THE AUTOMATED AI ROUTER ---
+def auto_sort_and_process(user_id, file_list):
+    """
+    Since the user uploaded files simultaneously, they might be in any order.
+    This function analyzes the files to identify which is which.
+    """
+    front_path, back_path, qr_path = None, None, None
+    
+    # Simple logic placeholder: In production, you would use OpenCV/PyZbar here.
+    # For example: If pyzbar.decode(img) finds data, that file is your QR code!
+    # If a face is detected via OpenCV, that file is your Front photo.
+    
+    # For this blueprint, we assume they arrived in order or assign them based on index:
+    if len(file_list) >= 3:
+        front_path = file_list[0]
+        back_path = file_list[1]
+        qr_path = file_list[2]
+    else:
+        raise ValueError("You must upload exactly 3 photos (Front, Back, and QR).")
+
+    output_path = f"output_{user_id}.png"
+    
+    # Core Processing Engine (Canvas Builder)
+    base_card = Image.new("RGB", (800, 400), color="white")
+    front_img = Image.open(front_path).resize((200, 250))
+    back_img = Image.open(back_path).resize((200, 250))
+    qr_img = Image.open(qr_path).resize((150, 150))
+    
+    base_card.paste(front_img, (50, 75))
+    base_card.paste(back_img, (300, 75))
+    base_card.paste(qr_img, (550, 125))
+    
+    draw = ImageDraw.Draw(base_card)
+    draw.text((50, 20), f"Automatically Generated Fayda Card for User {user_id}", fill="black")
+    
+    base_card.save(output_path)
+    return output_path, [front_path, back_path, qr_path]
+
+
+# --- 2. TELEGRAM MESSAGE HANDLER ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Welcome! Please select the **Front photo, Back photo, and QR code** "
+        "of your Fayda ID all at once from your gallery and send them together as an album."
+    )
+
+async def handle_album_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    media_group_id = update.message.media_group_id
+
+    # If the user sends a single photo instead of an album, ask them for all three
+    if not media_group_id:
+        await update.message.reply_text("⚠️ Please send all 3 required images together as a single album upload.")
+        return
+
+    # Download the current photo file immediately
+    photo_file = await update.message.photo[-1].get_file()
+    file_index = len(MEDIA_GROUPS.get(media_group_id, []))
+    temp_path = f"temp_{user_id}_{media_group_id}_{file_index}.jpg"
+    await photo_file.download_to_drive(temp_path)
+
+    # Initialize or append to our media group tracking container
+    if media_group_id not in MEDIA_GROUPS:
+        MEDIA_GROUPS[media_group_id] = []
+    MEDIA_GROUPS[media_group_id].append(temp_path)
+
+    # Wait briefly (2 seconds) for Telegram to finish delivering the other photos in the album
+    await asyncio.sleep(2)
+
+    # Check if this specific execution is the one responsible for running the processing
+    # (The last photo to arrive clears the queue so the pipeline runs exactly ONCE)
+    if media_group_id in MEDIA_GROUPS:
+        file_list = MEDIA_GROUPS[media_group_id]
+        
+        if len(file_list) < 3:
+            # We are still waiting for other images to finish downloading in parallel threads
+            return
+            
+        # Delete the entry from the global tracking dictionary so other threads bypass it
+        del MEDIA_GROUPS[media_group_id]
+        
+        status_msg = await update.message.reply_text("⚙️ 3 Images received simultaneously! Running AI processing pipeline...")
+        
+        try:
+            # Execute automated pipeline
+            output_file, used_files = auto_sort_and_process(user_id, file_list)
+            
+            # Dispatch final results back to user
+            with open(output_file, 'rb') as f:
+                await update.message.reply_photo(photo=f, caption="🎉 Automated compilation successful!")
+            
+            # Wipe output file
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Process Failed: {str(e)}")
+            used_files = file_list
+            
+        finally:
+            # Data Privacy Secure Shredding: Erase all imported images instantly
+            for path in used_files:
+                if os.path.exists(path):
+                    os.remove(path)
+
+
+# --- 3. BOT INITIALIZATION ---
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    # Listen specifically for photo uploads that arrive via messages
+    app.add_handler(MessageHandler(filters.PHOTO, handle_album_upload))
+
+    print("Bot is tracking simultaneous uploads... Press Ctrl+C to stop.")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()

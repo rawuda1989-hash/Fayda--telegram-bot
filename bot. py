@@ -7,8 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 from PIL import Image, ImageDraw
 
 # --- 1. TELEGRAM BOT CONFIGURATION ---
-# Replace this with the real token you got from @BotFather on Telegram
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+# 8623677428:AAEkOAL3xiqbYak-xtJZ6Z_l2NyoJAUoPcM
 
 # A global dictionary to temporarily collect files belonging to the same media group album
 # Structure: { media_group_id: [list_of_downloaded_file_paths] }
